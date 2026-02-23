@@ -29,9 +29,10 @@ class Sensor(Enum):
     SIGNAL0 = 18             # Local pheromone concentration
     SIGNAL0_FWD = 19         # Pheromone gradient in forward-backward axis
     SIGNAL0_LR = 20          # Pheromone gradient in left-right axis
-    # Removed Python-specific sensors: SAFE_ZONE, HAZARD_ZONE, RADIATION
-    # Ensure this enum matches C++ sensors-actions.h up to NUM_SENSES
-    # C++ NUM_SENSES = 21
+    # C++ NUM_SENSES = 21 — Python extensions below
+    ZONE_HERE = 21           # Zone type at current position (0=neutral, 0.5=safe, 1.0=hazard)
+    ZONE_FWD = 22            # Zone type in forward direction (average of next 3 cells)
+    ENERGY = 23              # Normalized energy level (0-1)
 
 
 class Action(Enum):

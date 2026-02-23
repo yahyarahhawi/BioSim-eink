@@ -14,7 +14,7 @@ class Population:
     def __init__(self, size, params):
         """
         Initialize a population of creatures.
-        
+
         Args:
             size: Number of creatures in the population
             params: Simulation parameters dictionary
@@ -24,6 +24,11 @@ class Population:
         self.creatures = []
         self.size = size
         self.generation = 0
+        self.event_log = None
+        self.environment_manager = None
+        self.extinction_warning_counters = {0: 0, 1: 0}
+        self.species_stats = {}
+        self.previous_survival_rates = {0: [], 1: []}
 
     def initialize(self, grid):
         """Initialize the first generation with uniform placement"""
@@ -79,7 +84,10 @@ class Population:
             # Mark position as occupied
             occupied_positions.add((int(position[0]), int(position[1])))
 
-            creature = Creature(genome=genome, position=position, params=self.params)
+            species_id = 0
+            if self.params.get('num_species', 1) >= 2:
+                species_id = 0 if i < self.size // 2 else 1
+            creature = Creature(genome=genome, position=position, params=self.params, species_id=species_id)
             self.creatures.append(creature)
 
             # Register creature in the world grid
@@ -136,118 +144,35 @@ class Population:
             self.initialize(grid)
             return self.creatures
 
-        # Create survival criteria checker
-        criteria = SurvivalCriteria(self.params, grid)
-
-        # Get survivors based on challenge type
+        # Build survivor list
         survivors = []
-        for creature in self.creatures:
-            # Get the result from the criterion check
-            result = criteria.check_criterion(creature, self.params['challenge'])
-            passed, score = result
-            
-            # Check if the creature is in a safe zone based on the challenge type
-            in_safe_zone = False
-            if self.params['challenge'] == 0:  # CHALLENGE_CIRCLE
-                # Circle in the top-left quadrant
-                center_x = self.params['world_size'][0] // 4
-                center_y = self.params['world_size'][1] // 4
-                radius = self.params['world_size'][0] // 4
-                dx = creature.position[0] - center_x
-                dy = creature.position[1] - center_y
-                distance = math.sqrt(dx * dx + dy * dy)
-                in_safe_zone = distance <= radius
-            elif self.params['challenge'] == 1:  # CHALLENGE_RIGHT_HALF
-                # Right half of the arena
-                in_safe_zone = creature.position[0] > self.params['world_size'][0] // 2
-            elif self.params['challenge'] == 4:  # CHALLENGE_CENTER_WEIGHTED
-                # Circle in the center
-                center_x = self.params['world_size'][0] // 2
-                center_y = self.params['world_size'][1] // 2
-                radius = self.params['world_size'][0] // 3
-                dx = creature.position[0] - center_x
-                dy = creature.position[1] - center_y
-                distance = math.sqrt(dx * dx + dy * dy)
-                in_safe_zone = distance <= radius
-            elif self.params['challenge'] == 5:  # CHALLENGE_CORNER
-                # Corners of the arena
-                radius = self.params['world_size'][0] // 8
-                corners = [
-                    (0, 0),
-                    (0, self.params['world_size'][1] - 1),
-                    (self.params['world_size'][0] - 1, 0),
-                    (self.params['world_size'][0] - 1, self.params['world_size'][1] - 1)
-                ]
-                
-                for corner in corners:
-                    dx = creature.position[0] - corner[0]
-                    dy = creature.position[1] - corner[1]
-                    distance = math.sqrt(dx * dx + dy * dy)
-                    if distance <= radius:
-                        in_safe_zone = True
-                        break
-            elif self.params['challenge'] == 10:  # CHALLENGE_RADIOACTIVE_WALLS
-                # For radioactive walls challenge, check if creature is far enough from the radioactive wall
-                x = int(creature.position[0])
-                world_width = self.params['world_size'][0]
-                
-                # Determine which wall is radioactive based on current step
-                current_step = self.params.get('current_step', 0)
-                steps_per_generation = self.params.get('steps_per_generation', 100)
-                radioactive_x = 0 if current_step < steps_per_generation / 2 else world_width - 1
-                
-                # Calculate distance from radioactive wall
-                distance = abs(x - radioactive_x)
-                
-                # Only creatures that are far enough from the radioactive wall are in the safe zone
-                in_safe_zone = distance >= world_width / 3  # Increased from 1/4 to 1/3 to match survival_criteria.py
-            elif self.params['challenge'] == 8:  # CHALLENGE_CENTER_SPARSE
-                # For center sparse challenge, check if creature is near center with specific neighbor count
-                # This should match the logic in survival_criteria.py
-                safe_center = (self.params['world_size'][0] // 2, self.params['world_size'][1] // 2)
-                outer_radius = self.params['world_size'][0] // 4
-                inner_radius = 1.5
-                min_neighbors = 5  # Includes self
-                max_neighbors = 8
-                
-                # Check if within outer radius of center
-                x, y = int(creature.position[0]), int(creature.position[1])
-                offset = (x - safe_center[0], y - safe_center[1])
-                distance = math.sqrt(offset[0] ** 2 + offset[1] ** 2)
-                
-                if distance <= outer_radius:
-                    # Count neighbors within inner radius
-                    count = 0
-                    for dx in range(-int(inner_radius), int(inner_radius) + 1):
-                        for dy in range(-int(inner_radius), int(inner_radius) + 1):
-                            dist_sq = dx * dx + dy * dy
-                            if dist_sq <= inner_radius * inner_radius:
-                                nx = min(self.params['world_size'][0] - 1, max(0, x + dx))
-                                ny = min(self.params['world_size'][1] - 1, max(0, y + dy))
-                                
-                                if grid.data[nx, ny, 0] > 0:  # Contains a creature
-                                    count += 1
-                    
-                    # Check if the neighbor count is within the required range
-                    in_safe_zone = min_neighbors <= count <= max_neighbors
-                else:
-                    in_safe_zone = False
-            else:
-                # For other challenges, use the passed result directly
-                in_safe_zone = passed
-            
-            # Only count creatures that pass the criterion, are in a safe zone,
-            # and have valid neural connections
-            if passed and in_safe_zone and creature.brain.connections:
-                survivors.append((creature, score))
-        
-        # If no survivors but creatures are alive, check if they're in the right half
-        if not survivors:
-            alive_count = sum(1 for c in self.creatures if c.alive)
-            if alive_count > 0:
+
+        if self.params.get('environment_system', False) and self.environment_manager is not None:
+            # Environment system mode: selection is purely energy-based.
+            # Creatures that survived (energy > 0) are ranked by energy.
+            # Pressure modifiers further adjust scores.
+            for creature in self.creatures:
+                if not creature.alive or not creature.brain.connections:
+                    continue
+                # Score = normalized energy (0-1)
+                score = min(1.0, creature.energy / 1000.0)
+                # Apply pressure modifier
+                _, score = self.environment_manager.apply_survival_modifiers(creature, True, score)
+                if score > 0:
+                    survivors.append((creature, score))
+        else:
+            # Classic challenge mode
+            criteria = SurvivalCriteria(self.params, grid)
+            for creature in self.creatures:
+                result = criteria.check_criterion(creature, self.params['challenge'])
+                passed, score = result
+                if passed and creature.brain.connections:
+                    survivors.append((creature, score))
+
+            # Fallback: if no survivors, take any alive creature in right half
+            if not survivors:
                 for creature in self.creatures:
                     if creature.alive and creature.position[0] > self.params['world_size'][0] / 2:
-                        # This creature should have survived - it's in the right half
                         survivors.append((creature, 1.0))
         
         # Sort survivors by score (highest first)
@@ -288,6 +213,11 @@ class Population:
                 # Replace survivors with saved kin
                 if saved_kin:
                     survivors = saved_kin
+
+        # Two-species handling
+        num_species = self.params.get('num_species', 1)
+        if num_species >= 2:
+            return self._species_aware_selection(survivors, grid)
 
         # Create offspring population
         offspring = []
@@ -379,6 +309,122 @@ class Population:
         
         print(f"Generation {self.generation}: {survivors_count} survivors, {reproduction_count} reproducers")
         
+        return offspring, survivors_count, reproduction_count
+
+    def _species_aware_selection(self, survivors, grid):
+        """Perform species-aware natural selection for two-species competition."""
+        from core.event_log import EventType
+
+        # Split survivors by species
+        survivors_by_species = {0: [], 1: []}
+        for creature, score in survivors:
+            sid = getattr(creature, 'species_id', 0)
+            survivors_by_species[sid].append((creature, score))
+
+        # Compute per-species stats
+        total_pop = len(self.creatures)
+        for sid in [0, 1]:
+            species_pop = sum(1 for c in self.creatures if getattr(c, 'species_id', 0) == sid)
+            species_survivors = len(survivors_by_species[sid])
+            survival_rate = species_survivors / species_pop if species_pop > 0 else 0.0
+            diversity = calculate_genetic_diversity(
+                [c for c, _ in survivors_by_species[sid]]
+            ) if survivors_by_species[sid] else 0.0
+            self.species_stats[sid] = {
+                'population': species_pop,
+                'survivors': species_survivors,
+                'survival_rate': survival_rate,
+                'diversity': diversity,
+            }
+            self.previous_survival_rates[sid].append(survival_rate)
+            if len(self.previous_survival_rates[sid]) > 25:
+                self.previous_survival_rates[sid] = self.previous_survival_rates[sid][-25:]
+
+        offspring = []
+        half = self.size // 2
+
+        for sid in [0, 1]:
+            species_survivors = survivors_by_species[sid]
+            target_count = half if sid == 0 else self.size - half
+
+            if not species_survivors:
+                # Check extinction
+                self.extinction_warning_counters[sid] = 0
+                if self.event_log:
+                    self.event_log.log(
+                        self.generation, EventType.SPECIES_EXTINCTION,
+                        f"Species {sid} went extinct",
+                        {'species_id': sid}
+                    )
+                if self.params.get('species_respawn_on_extinction', True):
+                    # Respawn at 10% of total pop
+                    respawn_count = max(10, self.size // 10)
+                    for _ in range(min(respawn_count, target_count)):
+                        genome = Genome(length=self.params['genome_length'], params=self.params)
+                        child = Creature(genome=genome, params=self.params, species_id=sid)
+                        offspring.append(child)
+                    if self.event_log:
+                        self.event_log.log(
+                            self.generation, EventType.SPECIES_RESPAWN,
+                            f"Species {sid} respawned with {respawn_count} creatures",
+                            {'species_id': sid, 'count': respawn_count}
+                        )
+                    # Fill remaining with random
+                    while len([o for o in offspring if o.species_id == sid]) < target_count:
+                        genome = Genome(length=self.params['genome_length'], params=self.params)
+                        child = Creature(genome=genome, params=self.params, species_id=sid)
+                        offspring.append(child)
+                continue
+
+            # Extinction warning: below 5% survival rate
+            if self.species_stats[sid]['survival_rate'] < 0.05:
+                self.extinction_warning_counters[sid] += 1
+                if self.extinction_warning_counters[sid] >= 3 and self.event_log:
+                    self.event_log.log(
+                        self.generation, EventType.SPECIES_EXTINCTION_WARNING,
+                        f"Species {sid} at risk (survival rate {self.species_stats[sid]['survival_rate']:.1%})",
+                        {'species_id': sid, 'consecutive_low_gens': self.extinction_warning_counters[sid]}
+                    )
+            else:
+                self.extinction_warning_counters[sid] = 0
+
+            # Elite selection per species
+            elite_count = max(1, int(target_count * 0.10))
+            elites = [s[0] for s in species_survivors[:elite_count]]
+
+            for elite in elites:
+                genome_copy = Genome(
+                    [Gene(g.hex_value, params=self.params) for g in elite.genome.genes],
+                    params=self.params
+                )
+                child = Creature(genome=genome_copy, params=self.params, species_id=sid)
+                offspring.append(child)
+
+            # Fill rest with crossover
+            while len([o for o in offspring if o.species_id == sid]) < target_count:
+                parent1 = self.tournament_selection(species_survivors)
+                parent2 = self.tournament_selection(species_survivors)
+                attempts = 0
+                while parent1 == parent2 and len(species_survivors) > 1 and attempts < 3:
+                    parent2 = self.tournament_selection(species_survivors)
+                    attempts += 1
+                child_genome = parent1.genome.crossover(parent2.genome)
+                child_genome.mutate(self.params['mutation_rate'])
+                child = Creature(
+                    genome=child_genome, params=self.params,
+                    parent1_id=parent1.id, parent2_id=parent2.id,
+                    species_id=sid
+                )
+                offspring.append(child)
+
+        self.generation += 1
+        parent_creatures = [creature for creature, _ in survivors]
+        self.export_parent_genomes(parent_creatures)
+        survivors_count = len(survivors)
+        reproduction_count = len(parent_creatures)
+        print(f"Generation {self.generation}: {survivors_count} survivors, {reproduction_count} reproducers"
+              f" (sp0: {self.species_stats.get(0, {}).get('survivors', 0)}"
+              f", sp1: {self.species_stats.get(1, {}).get('survivors', 0)})")
         return offspring, survivors_count, reproduction_count
 
     def tournament_selection(self, scored_creatures, tournament_size=5):

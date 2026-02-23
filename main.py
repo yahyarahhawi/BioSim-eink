@@ -85,10 +85,43 @@ def main():
     try:
         # Always use the interactive simulator (non-parallel)
         simulator = InteractiveSimulator(params, grid, signals)
-        
+
         simulator.zone_manager = zone_manager
         simulator.barrier_manager = barrier_manager
         grid.zone_manager = zone_manager  # For reset operations
+
+        # Initialize event log
+        from core.event_log import EventLog
+        event_log = EventLog()
+        simulator.event_log = event_log
+        simulator.population.event_log = event_log
+
+        # Initialize environment manager if enabled
+        if params.get('environment_system', False):
+            from environment.environment_manager import EnvironmentManager
+            from environment.radiation import RadiationManager
+            env_manager = EnvironmentManager(
+                grid, zone_manager, barrier_manager,
+                RadiationManager(grid, params), params, event_log
+            )
+            simulator.environment_manager = env_manager
+            simulator.population.environment_manager = env_manager
+
+        # Initialize challenge rotator if enabled
+        if params.get('challenge_rotator', False):
+            from core.challenge_rotator import ChallengeRotator
+            challenge_rotator = ChallengeRotator(params, event_log)
+            simulator.challenge_rotator = challenge_rotator
+
+        # Initialize display driver
+        display_mode = params.get('display_mode', 'pygame')
+        if display_mode == 'pygame':
+            from visualization.pygame_driver import PyGameDriver
+            simulator.display_driver = PyGameDriver()
+        elif display_mode == 'eink':
+            from visualization.eink_driver import EInkDriver
+            simulator.display_driver = EInkDriver()
+
         logging.info("Simulator initialized with ZoneManager and BarrierManager.")
     except Exception as e:
         logging.error("Failed to initialize Simulator", exc_info=True)

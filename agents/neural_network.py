@@ -409,19 +409,7 @@ class NeuralNetwork:
             if level > emit_threshold and random.random() < level:
                 state_updates['emit_signal0'] = True
 
-        # Process kill forward action with probabilistic execution
-        # Match C++ threshold and probability calculation
-        if Action.KILL_FORWARD.value < len(action_values):
-            kill_threshold = 0.5  # Same as C++
-            level = action_values[Action.KILL_FORWARD.value]
-            level *= adjusted_responsiveness
-
-            # C++ uses: prob2bool((level - ACTION_MIN) / ACTION_RANGE)
-            # Assuming ACTION_MIN=0.0, ACTION_MAX=1.0, ACTION_RANGE=1.0
-            if level > kill_threshold and random.random() < level:
-                state_updates['attempt_kill'] = True
-
-        # Add other special action processing as needed
+        # Kill action disabled — positional challenges don't need it
 
         return state_updates
 

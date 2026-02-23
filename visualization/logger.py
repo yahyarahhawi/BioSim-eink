@@ -35,7 +35,7 @@ class Logger:
 
                 self.file = open(self.filename, 'w', newline='')
                 self.writer = csv.writer(self.file)
-                self.writer.writerow([
+                header = [
                     'Generation',
                     'Population',
                     'Creatures_In_Safe_Zone',
@@ -49,8 +49,14 @@ class Logger:
                     'Kills',
                     'Selection_Method',
                     'Survivors_Count',
-                    'Reproduction_Count'
-                ])
+                    'Reproduction_Count',
+                ]
+                if params.get('num_species', 1) >= 2:
+                    header.extend([
+                        'Species_0_Pop', 'Species_0_Survivors', 'Species_0_Survival_Rate',
+                        'Species_1_Pop', 'Species_1_Survivors', 'Species_1_Survival_Rate',
+                    ])
+                self.writer.writerow(header)
                 
                 # Initialize tracking variables for survivors and reproduction
                 self.survivors_count = 0
@@ -106,7 +112,7 @@ class Logger:
         avg_energy = sum(energies) / len(energies) if energies else 0
 
         # Write data to CSV
-        self.writer.writerow([
+        row = [
             generation,
             population,
             len(safe_creatures),
@@ -120,8 +126,17 @@ class Logger:
             kills,
             self.params['selection_method'],
             self.survivors_count,
-            self.reproduction_count
-        ])
+            self.reproduction_count,
+        ]
+        if self.params.get('num_species', 1) >= 2:
+            for sid in [0, 1]:
+                sp_creatures = [c for c in creatures if getattr(c, 'species_id', 0) == sid]
+                sp_pop = len(sp_creatures)
+                # Use stored species stats if available
+                sp_survivors = 0
+                sp_rate = 0.0
+                row.extend([sp_pop, sp_survivors, f"{sp_rate:.3f}"])
+        self.writer.writerow(row)
         # Flush to ensure data is written
         self.file.flush()
         

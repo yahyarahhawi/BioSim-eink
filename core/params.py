@@ -16,21 +16,21 @@ DEFAULT_PARAMS = {
     'enable_kill_neuron': False,  # Whether the kill neuron is enabled
     'max_age': 1000,  # Maximum age of a creature (match stepsPerGeneration)
     'weight_divisor': 8192.0,  # Divisor for neural connection weights (match C++)
-    'safe_zone_bonus': 10.0,  # Energy bonus per step in safe zone
-    'hazard_zone_penalty': 10.0,  # Energy penalty per step in hazard zone
+    'safe_zone_bonus': 3.0,  # Energy bonus per step in safe zone
+    'hazard_zone_penalty': 2.0,  # Energy penalty per step in hazard zone
     'zone_size': 100,  # Default size of zones when created
     'log_to_csv': True,  # Whether to log generation statistics to CSV
     'log_folder': 'evolution_logs',  # Folder to save CSV logs
     'enable_radioactive_environment': False,  # Whether to enable radioactive environment
     'radiation_falloff_factor': 10.0,  # Exponential falloff factor for radiation
     'radiation_switch_steps': 720,  # Steps before radiation wall switches
-    'show_direction_lines': True,  # Toggle to show/hide direction lines
+    'show_direction_lines': False,  # Toggle to show/hide direction lines
     'direction_line_length': 1,  # Length of direction lines (set to 0 for very short lines)
     'direction_line_thickness': 1,  # Thickness of direction lines
     'show_pheromones': True,  # Toggle to show/hide pheromone trails
     'show_challenge_areas': False,  # Toggle to show/hide challenge area highlighting
     'challenge_highlight_transparency': 40,  # Transparency level for challenge area highlighting (0-255)
-    'num_sensory_neurons': 21,  # Match C++ NUM_SENSES (index 0-20)
+    'num_sensory_neurons': 24,  # C++ NUM_SENSES=21 + 3 Python extensions (ZONE_HERE, ZONE_FWD, ENERGY)
     'num_internal_neurons': 20,  # Match C++ maxNumberNeurons
     'num_output_neurons': 17,  # Match C++ NUM_ACTIONS
     'responsiveness_curve_k_factor': 2,  # Match C++ responsivenessCurveKFactor
@@ -49,7 +49,27 @@ DEFAULT_PARAMS = {
     'sexual_reproduction': True,  # Match C++ sexualReproduction
     'choose_parents_by_fitness': True,  # Match C++ chooseParentsByFitness
     'kill_enable': False,  # Match C++ killEnable
-    'background_color': [255, 255, 255],  # RGB values for simulation background color (white)
+    'background_color': [245, 243, 238],  # RGB values for simulation background color (warm off-white)
+    # Two-species competition
+    'num_species': 1,  # Number of species (1 or 2)
+    'species_colors': [[255, 0, 0], [0, 0, 255]],  # RGB colors for each species
+    'species_respawn_on_extinction': True,  # Respawn species if it goes extinct
+    # Challenge rotator
+    'challenge_rotator': False,  # Whether to enable automatic challenge rotation
+    'challenge_rotation_interval': 500,  # Generations before rotating to next challenge
+    # Environment pressure system
+    'environment_system': False,  # Whether to enable dynamic environment pressures
+    'pressure_min_duration': 300,  # Minimum pressure duration in generations
+    'pressure_max_duration': 800,  # Maximum pressure duration in generations
+    'transition_duration': 50,  # Duration of transition between pressures
+    'pressure_weights': {
+        'wall': 1.0, 'corridor': 1.0, 'bloom': 1.0,
+        'drought': 1.0, 'wave': 1.0, 'partition': 1.0
+    },
+    # Display
+    'display_mode': 'pygame',  # Display mode: 'pygame' or 'eink'
+    'genome_divergence_tint': False,  # Tint divergent genomes yellow
+    'eink_preview': False,  # E-ink preview mode: quantize to 6 colors, 800x480, refresh every 50 gens
 }
 
 

@@ -2,9 +2,11 @@ import time
 import logging
 import pygame
 from core.simulator import Simulator
+from core.event_log import EventType
 from visualization.renderer import GridRenderer, CreatureRenderer
 from visualization.challenge_renderer import ChallengeRenderer
 from visualization.creature_lineage import CreatureLineageLogger
+from visualization.display_driver import DisplayFrame, SidebarData
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -34,8 +36,9 @@ class CustomRenderer:
 
     def render_world(self, screen, grid, creatures):
         """Render the world with zones, barriers and creatures"""
-        # Clear screen
-        screen.fill((30, 30, 40))  # Dark blue-gray background
+        # Clear screen with white for e-ink palette compatibility
+        bg = tuple(self.params.get('background_color', [255, 255, 255]))
+        screen.fill(bg)
         
         # Create a surface for the grid with the exact grid dimensions
         grid_width = grid.size[0] * self.display_scale
@@ -46,10 +49,11 @@ class CustomRenderer:
         bg_color = self.params.get('background_color', [255, 255, 255])
         grid_surface.fill(tuple(bg_color))  # Background for grid
         
-        # Render challenge area if a challenge is selected and highlighting is enabled
+        # Render challenge area only when environment_system is not active
         challenge_type = self.params.get('challenge', None)
         if challenge_type is not None and self.params.get('show_challenge_areas', False):
-            self.challenge_renderer.render_challenge_area(grid_surface, grid, challenge_type, self.params)
+            if not self.params.get('environment_system', False):
+                self.challenge_renderer.render_challenge_area(grid_surface, grid, challenge_type, self.params)
 
         # Render grid elements (zones, barriers, etc.) on the grid surface
         self.grid_renderer.render_grid(grid_surface, grid, self.params)
@@ -101,7 +105,7 @@ class InteractiveSimulator(Simulator):
         self.zone_type = 1  # 1=safe, 2=hazard
         self.zone_size = params.get('zone_size', 50)
         self.directional_percentage = 10
-        self.show_help = True
+        self.show_help = False
         self.show_kill_counter = False  # Toggle for kill counter display
         
         # Pygame references will be initialized in run()
@@ -128,6 +132,16 @@ class InteractiveSimulator(Simulator):
         self.instructions_size = (350, 550)
         self.instructions_pos = None
         self.custom_renderer = None
+
+        # E-ink evolution display components
+        self.event_log = None
+        self.environment_manager = None
+        self.challenge_rotator = None
+        self.display_driver = None
+        self.previous_population = 0
+        self.similar_survival_counter = 0
+        self.last_survivors_count = 0
+        self.last_survivors_pct = 0.0
 
     def initialize(self):
         """Initialize the simulation with interactive-specific behavior"""
@@ -194,7 +208,7 @@ class InteractiveSimulator(Simulator):
                 elif event.key == pygame.K_F1:
                     self.show_help = not self.show_help
                 elif event.key == pygame.K_d:
-                    self.params['show_direction_lines'] = not self.params.get('show_direction_lines', True)
+                    self.params['show_direction_lines'] = not self.params.get('show_direction_lines', False)
                     # logger.info(f"Direction lines {'enabled' if self.params['show_direction_lines'] else 'disabled'}")
                 elif event.key == pygame.K_k:
                     self.show_kill_counter = not self.show_kill_counter
@@ -221,6 +235,12 @@ class InteractiveSimulator(Simulator):
                 elif event.key == pygame.K_g and self.paused:
                     self.step = self.params['steps_per_generation']  # This will trigger a new generation
                     # logger.info("Forced new generation")
+
+                # Save/Load population
+                elif event.key == pygame.K_F5:
+                    self._save_population()
+                elif event.key == pygame.K_F9:
+                    self._load_population()
 
                 # Reset key
                 elif event.key == pygame.K_r and self.paused:
@@ -250,6 +270,44 @@ class InteractiveSimulator(Simulator):
         # We're not using zones anymore
         logger.info("Zone creation is disabled - using different methods for reproduction selection")
         
+    def _save_population(self):
+        """Save current population genomes to a pickle file."""
+        import pickle
+        save_data = {
+            'generation': self.generation,
+            'genomes': [([g.hex_value for g in c.genome.genes], getattr(c, 'species_id', 0)) for c in self.population.creatures],
+        }
+        path = 'population_save.pkl'
+        try:
+            with open(path, 'wb') as f:
+                pickle.dump(save_data, f)
+            print(f"Saved {len(self.population.creatures)} creatures at gen {self.generation} to {path}")
+        except Exception as e:
+            print(f"Save failed: {e}")
+
+    def _load_population(self):
+        """Load population genomes from a pickle file and rebuild creatures."""
+        import pickle
+        from agents.creature import Creature
+        from agents.genome import Genome, Gene
+        path = 'population_save.pkl'
+        try:
+            with open(path, 'rb') as f:
+                save_data = pickle.load(f)
+            genomes_data = save_data['genomes']
+            new_creatures = []
+            for hex_list, species_id in genomes_data:
+                genome = Genome([Gene(h, params=self.params) for h in hex_list], params=self.params)
+                creature = Creature(genome=genome, params=self.params, species_id=species_id)
+                new_creatures.append(creature)
+            self.population.creatures = new_creatures
+            self._place_new_generation_optimized()
+            print(f"Loaded {len(new_creatures)} creatures (saved at gen {save_data['generation']}), now at gen {self.generation}")
+        except FileNotFoundError:
+            print("No save file found (population_save.pkl)")
+        except Exception as e:
+            print(f"Load failed: {e}")
+
     def _delete_log_files(self):
         """Delete log files from previous runs"""
         import os
@@ -320,7 +378,7 @@ class InteractiveSimulator(Simulator):
                 "S: Toggle challenge highlighting",
                 f"Challenge highlighting: {'ON' if self.params.get('show_challenge_areas', False) else 'OFF'}",
                 "D: Toggle direction lines",
-                f"Direction lines: {'ON' if self.params.get('show_direction_lines', True) else 'OFF'}",
+                f"Direction lines: {'ON' if self.params.get('show_direction_lines', False) else 'OFF'}",
             "K: Toggle kill counter",
             f"Kill counter: {'ON' if self.show_kill_counter else 'OFF'}",
             "B: Cycle background colors",
@@ -407,8 +465,11 @@ class InteractiveSimulator(Simulator):
             print(f"Generation {self.generation}: {survivors_before_selection} creatures pass the radioactive walls challenge")
 
         # Perform natural selection
+        pop_before = len(self.population.creatures)
         new_creatures, survivors_count, reproduction_count = self.population.natural_selection_tournament(self.grid)
-        
+        self.last_survivors_count = survivors_count
+        self.last_survivors_pct = survivors_count / pop_before if pop_before > 0 else 0.0
+
         # Record survivors and reproduction counts in the logger
         if hasattr(self.logger, 'record_survivors'):
             self.logger.record_survivors(survivors_count)
@@ -425,6 +486,61 @@ class InteractiveSimulator(Simulator):
         self.generation += 1
         self.step = 0
         self.murder_count = 0  # Reset kill count for new generation
+
+        # Environment pressure system
+        if self.environment_manager:
+            self.environment_manager.step_generation(self.generation)
+
+        # Challenge rotator
+        if self.challenge_rotator:
+            self.challenge_rotator.step_generation(self.generation)
+
+        # Detect population events
+        current_pop = len(self.population.creatures)
+        if self.event_log and self.previous_population > 0:
+            ratio = current_pop / self.previous_population if self.previous_population > 0 else 1.0
+            if ratio < 0.5:
+                self.event_log.log(
+                    self.generation, EventType.POPULATION_CRASH,
+                    f"Population crashed to {current_pop}",
+                    {'previous': self.previous_population, 'current': current_pop}
+                )
+            elif ratio > 1.5:
+                self.event_log.log(
+                    self.generation, EventType.POPULATION_BOOM,
+                    f"Population boomed to {current_pop}",
+                    {'previous': self.previous_population, 'current': current_pop}
+                )
+
+            # Check genetic bottleneck
+            from utils.genetic import calculate_genetic_diversity
+            diversity = calculate_genetic_diversity(self.population.creatures[:50])
+            if diversity < 0.1:
+                self.event_log.log(
+                    self.generation, EventType.GENETIC_BOTTLENECK,
+                    f"Genetic bottleneck detected (diversity={diversity:.3f})",
+                    {'diversity': diversity}
+                )
+
+            # Check species behavioral convergence
+            if self.params.get('num_species', 1) >= 2 and hasattr(self.population, 'species_stats'):
+                stats = self.population.species_stats
+                if 0 in stats and 1 in stats:
+                    r0 = stats[0].get('survival_rate', 0)
+                    r1 = stats[1].get('survival_rate', 0)
+                    if abs(r0 - r1) < 0.05 and r0 > 0.1:
+                        self.similar_survival_counter += 1
+                        if self.similar_survival_counter >= 20:
+                            self.event_log.log(
+                                self.generation, EventType.BEHAVIORAL_CONVERGENCE,
+                                "Species showing behavioral convergence",
+                                {'sp0_rate': r0, 'sp1_rate': r1}
+                            )
+                            self.similar_survival_counter = 0
+                    else:
+                        self.similar_survival_counter = 0
+
+        self.previous_population = current_pop
 
         # Place new generation on the grid using the optimized approach
         self._place_new_generation_optimized()
@@ -475,47 +591,51 @@ class InteractiveSimulator(Simulator):
 
     def render(self):
         """Render the current state of the simulation"""
+        eink_preview = self.params.get('eink_preview', False)
+
+        # In e-ink preview mode, only refresh display every 50 generations (at step 0)
+        if eink_preview and not (self.step == 0 and self.generation % 50 == 0) and not self.paused:
+            return
+
         # Use our custom renderer that manages its own surface
         self.custom_renderer.render_world(self.screen, self.grid, self.population.creatures)
 
         # Display generation and step information
         info_text = self.font.render(
-            f"Gen: {self.generation} | Pop: {len(self.population.creatures)} | " +
-            f"Step: {self.step}/{self.params['steps_per_generation']} | " +
+            f"Gen: {self.generation} | Pop: {len(self.population.creatures)} | "
+            f"Step: {self.step}/{self.params['steps_per_generation']} | "
             f"Speed: {self.params['fps']} fps",
             True, (255, 255, 255))
         self.screen.blit(info_text, (10, 10))
 
-        # Count creatures in safe zones
-        safe_creatures = [c for c in self.population.creatures if c.in_safe_zone]
-        safe_count = len(safe_creatures)
-        safe_percentage = (safe_count / len(self.population.creatures) * 100
-                           if self.population.creatures else 0)
+        # Display challenge name only when environment system is off
+        if not self.params.get('environment_system', False):
+            challenge_type = self.params.get('challenge', None)
+            if challenge_type is not None:
+                challenge_name = self.custom_renderer.challenge_renderer.get_challenge_name(challenge_type)
+                highlight_status = "ON" if self.params.get('show_challenge_areas', False) else "OFF"
+                challenge_text = self.font.render(
+                    f"Challenge: {challenge_name} | Highlighting: {highlight_status}",
+                    True, (255, 255, 0))
+                self.screen.blit(challenge_text, (10, 35))
 
-        # Show safe zone status
-        # safe_text = self.font.render(
-        #     f"Safe Zones: {safe_count}/{len(self.population.creatures)} ({safe_percentage:.1f}%)",
-        #     True, (0, 255, 0))
-        # self.screen.blit(safe_text, (10, 35))
-        
-        # Display challenge name and highlighting status
-        challenge_type = self.params.get('challenge', None)
-        if challenge_type is not None:
-            challenge_name = self.custom_renderer.challenge_renderer.get_challenge_name(challenge_type)
-            highlight_status = "ON" if self.params.get('show_challenge_areas', False) else "OFF"
-            challenge_text = self.font.render(
-                f"Challenge: {challenge_name} | Highlighting: {highlight_status}",
-                True, (255, 255, 0))
-            self.screen.blit(challenge_text, (10, 35))
-            
         # Display kill count if kill counter is enabled
         if self.show_kill_counter:
-            # Make the kill counter more visible
             kill_text = self.font.render(
                 f"KILLS: {self.murder_count}",
-                True, (255, 0, 0))  # Red text for kills
-            # Position at top right with more margin
+                True, (255, 0, 0))
             self.screen.blit(kill_text, (self.display_size[0] - 150, 10))
+
+        # Render sidebar via display driver if present
+        if self.display_driver:
+            sidebar_data = self._build_sidebar_data()
+            frame = DisplayFrame(sidebar_data=sidebar_data)
+            self.display_driver.update(frame)
+
+        # E-ink preview mode label
+        if eink_preview:
+            label = self.font.render("PREVIEW MODE", True, (200, 80, 80))
+            self.screen.blit(label, (10, self.display_size[1] - 30))
 
         # Show status if paused
         if self.paused:
@@ -531,12 +651,72 @@ class InteractiveSimulator(Simulator):
         # Update display
         pygame.display.flip()
 
+    def _build_sidebar_data(self):
+        """Build SidebarData from current simulation state."""
+        data = SidebarData()
+        data.generation = self.generation
+        data.total_population = len(self.population.creatures)
+
+        num_species = self.params.get('num_species', 1)
+        if num_species >= 2:
+            for sid in [0, 1]:
+                count = sum(1 for c in self.population.creatures if getattr(c, 'species_id', 0) == sid)
+                data.species_populations[sid] = count
+            stats = getattr(self.population, 'species_stats', {})
+            for sid in [0, 1]:
+                if sid in stats:
+                    data.species_survival_rates[sid] = stats[sid].get('survival_rate', 0.0)
+                    rates = getattr(self.population, 'previous_survival_rates', {}).get(sid, [])
+                    if len(rates) >= 3:
+                        recent = rates[-3:]
+                        if data.species_populations[sid] == 0:
+                            data.species_trends[sid] = 'extinct'
+                        elif recent[-1] > recent[0] + 0.05:
+                            data.species_trends[sid] = 'up'
+                        elif recent[-1] < recent[0] - 0.05:
+                            data.species_trends[sid] = 'down'
+
+        if self.challenge_rotator:
+            data.current_pressure = self.challenge_rotator.get_current_name()
+            data.pressure_since_gen = self.challenge_rotator.started_at_gen
+            data.pressure_progress = self.challenge_rotator.get_progress(self.generation)
+            data.mode_label = "Challenge"
+        elif self.environment_manager:
+            data.current_pressure = self.environment_manager.get_current_pressure_name()
+            data.pressure_since_gen = self.environment_manager.pressure_start_gen
+            elapsed = self.generation - self.environment_manager.pressure_start_gen
+            dur = self.environment_manager.pressure_duration
+            data.pressure_progress = min(1.0, elapsed / dur) if dur > 0 else 0.0
+
+        if self.event_log:
+            recent = self.event_log.get_recent(6)
+            data.recent_events = [f"G{e.generation}: {e.description}" for e in recent]
+            data.extinction_count = len(self.event_log.get_by_type(EventType.SPECIES_EXTINCTION))
+
+        data.survivors_last_gen = self.last_survivors_count
+        data.survivors_last_gen_pct = self.last_survivors_pct
+
+        return data
+
     def run(self):
         """Run the interactive simulation loop"""
         # Initialize pygame from scratch
         pygame.init()
-        self.screen = pygame.display.set_mode(self.display_size)
-        pygame.display.set_caption("Evolution Simulator - Interactive Mode")
+        # Determine window size
+        eink_preview = self.params.get('eink_preview', False)
+        if eink_preview:
+            # E-ink preview: fixed 800x480 window
+            display_size = (800, 480)
+        else:
+            display_size = self.display_size
+            # Widen window for sidebar if display driver is present
+            if self.display_driver:
+                from visualization.pygame_driver import PyGameDriver
+                if isinstance(self.display_driver, PyGameDriver):
+                    display_size = (self.display_size[0] + PyGameDriver.SIDEBAR_WIDTH, self.display_size[1])
+        self.screen = pygame.display.set_mode(display_size)
+        caption = "Evolution Simulator - E-Ink Preview" if eink_preview else "Evolution Simulator - Interactive Mode"
+        pygame.display.set_caption(caption)
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont(None, 24)
         self.title_font = pygame.font.SysFont(None, 28)
@@ -546,10 +726,17 @@ class InteractiveSimulator(Simulator):
 
         # Create our custom renderer that doesn't rely on existing pygame surfaces
         self.custom_renderer = CustomRenderer(self.params)
+
+        # Initialize display driver if present
+        if self.display_driver:
+            from visualization.pygame_driver import PyGameDriver
+            if isinstance(self.display_driver, PyGameDriver):
+                self.display_driver.initialize(self.screen)
         
-        # Enable challenge highlighting by default for certain challenges
-        if self.params.get('challenge', 0) in [1, 14]:  # CHALLENGE_RIGHT_HALF or CHALLENGE_NEAR_BARRIER
-            self.params['show_challenge_areas'] = True
+        # Enable challenge highlighting by default for certain challenges (only if environment system is off)
+        if not self.params.get('environment_system', False):
+            if self.params.get('challenge', 0) in [1, 14]:
+                self.params['show_challenge_areas'] = True
 
         # Initialize simulation
         self.initialize()

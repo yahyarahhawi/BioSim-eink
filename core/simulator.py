@@ -53,6 +53,11 @@ class Simulator:
         # Tracking statistics
         self.murder_count = 0
 
+        # E-ink evolution display components (set by main.py)
+        self.event_log = None
+        self.environment_manager = None
+        self.display_driver = None
+
     def initialize(self):
         """
         Initialize the simulation by setting up the environment and population.

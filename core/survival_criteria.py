@@ -21,6 +21,7 @@ CHALLENGE_PAIRS = 15              # Survive in pairs with specific neighbor conf
 CHALLENGE_LOCATION_SEQUENCE = 16  # Score based on number of locations visited
 CHALLENGE_ALTRUISM = 17           # Altruism challenge - NW safe zone
 CHALLENGE_ALTRUISM_SACRIFICE = 18 # Altruism sacrifice - NE sacrifice zone
+CHALLENGE_NONE = 20               # No positional challenge — all alive creatures pass (use with environment_system)
 
 class SurvivalCriteria:
     """
@@ -118,7 +119,7 @@ class SurvivalCriteria:
         else:
             # For certain challenges, don't use the fallback mechanism
             # Only creatures that meet the specific criteria should survive
-            if challenge_type in [CHALLENGE_PAIRS, CHALLENGE_NEAR_BARRIER, CHALLENGE_EAST_WEST_EIGHTHS, CHALLENGE_TOUCH_ANY_WALL, CHALLENGE_AGAINST_ANY_WALL, CHALLENGE_LEFT_EIGHTH, CHALLENGE_CORNER_WEIGHTED, CHALLENGE_CENTER_SPARSE, CHALLENGE_CENTER_UNWEIGHTED]:
+            if challenge_type in [CHALLENGE_PAIRS, CHALLENGE_NEAR_BARRIER, CHALLENGE_EAST_WEST_EIGHTHS, CHALLENGE_TOUCH_ANY_WALL, CHALLENGE_AGAINST_ANY_WALL, CHALLENGE_LEFT_EIGHTH, CHALLENGE_CORNER, CHALLENGE_CORNER_WEIGHTED, CHALLENGE_CENTER_WEIGHTED, CHALLENGE_CENTER_SPARSE, CHALLENGE_CENTER_UNWEIGHTED, CHALLENGE_RIGHT_HALF, CHALLENGE_RIGHT_QUARTER, CHALLENGE_CIRCLE]:
                 return (False, fallback_score)
             else:
                 # Otherwise, allow creatures with high energy to survive as a fallback
