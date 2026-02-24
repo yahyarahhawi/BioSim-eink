@@ -427,6 +427,165 @@ class Population:
               f", sp1: {self.species_stats.get(1, {}).get('survivors', 0)})")
         return offspring, survivors_count, reproduction_count
 
+    def attempt_continuous_reproduction(self, grid, survival_criteria):
+        """Find fertile creatures and attempt reproduction with nearby mates.
+
+        Returns list of new offspring creatures (already placed on grid).
+        """
+        params = self.params
+        target_pop = params['population_size']
+        alive_count = sum(1 for c in self.creatures if c.alive)
+        pop_ratio = alive_count / target_pop if target_pop > 0 else 1.0
+
+        # Scale threshold: lower when underpopulated (easier to breed),
+        # higher when overpopulated (harder to breed)
+        base_threshold = params.get('continuous_reproduction_threshold', 800)
+        if pop_ratio < 1.0:
+            threshold = base_threshold * max(0.4, pop_ratio)
+        else:
+            # Quadratic increase above target — gets very hard to reproduce
+            overshoot = pop_ratio - 1.0
+            threshold = base_threshold * (1.0 + 2.0 * overshoot + 3.0 * overshoot * overshoot)
+        cost = params.get('continuous_reproduction_cost', 400)
+        radius = params.get('continuous_reproduction_radius', 5)
+
+        fertile = [c for c in self.creatures if c.alive and c.energy >= threshold]
+        random.shuffle(fertile)
+
+        offspring = []
+        reproducers = set()
+        for parent1 in fertile:
+            if not parent1.alive or parent1.energy < cost:
+                continue
+
+            # Find a nearby alive mate within Manhattan distance
+            mate = None
+            for c in self.creatures:
+                if c is parent1 or not c.alive:
+                    continue
+                dist = abs(int(c.position[0]) - int(parent1.position[0])) + \
+                       abs(int(c.position[1]) - int(parent1.position[1]))
+                if dist <= radius:
+                    mate = c
+                    break
+
+            if mate is None:
+                continue
+
+            # Find empty cell anywhere on the map
+            try:
+                spot = grid.find_empty_location()
+                spot = (int(spot[0]), int(spot[1]))
+            except Exception:
+                continue
+
+            # Crossover + mutate
+            child_genome = parent1.genome.crossover(mate.genome)
+            child_genome.mutate(params['mutation_rate'])
+
+            child = Creature(
+                genome=child_genome,
+                position=spot,
+                params=params,
+                parent1_id=parent1.id,
+                parent2_id=mate.id,
+                species_id=getattr(parent1, 'species_id', 0),
+            )
+
+            # Place on grid
+            grid.data[spot[0], spot[1], 0] = child.id
+
+            # Deduct energy
+            parent1.energy -= cost
+            mate.energy -= cost * 0.5
+
+            reproducers.add(parent1.id)
+            reproducers.add(mate.id)
+            offspring.append(child)
+
+        return offspring, reproducers
+
+    def reproduce_top_n(self, grid, n):
+        """Pick top-N highest-energy creatures to reproduce once each.
+
+        Returns (offspring_list, reproducer_id_set).
+        """
+        params = self.params
+        cost = params.get('continuous_reproduction_cost', 400)
+        alive = [c for c in self.creatures if c.alive]
+        # Sort by energy descending — fittest reproduce first
+        alive.sort(key=lambda c: c.energy, reverse=True)
+
+        offspring = []
+        reproducers = set()
+
+        for parent1 in alive:
+            if len(offspring) >= n:
+                break
+            if parent1.energy < cost:
+                continue
+
+            # Pick a random mate from alive creatures (not self)
+            mate = None
+            candidates = [c for c in alive if c is not parent1 and c.alive]
+            if not candidates:
+                continue
+            mate = random.choice(candidates)
+
+            try:
+                spot = grid.find_empty_location()
+                spot = (int(spot[0]), int(spot[1]))
+            except Exception:
+                continue
+
+            child_genome = parent1.genome.crossover(mate.genome)
+            child_genome.mutate(params['mutation_rate'])
+
+            child = Creature(
+                genome=child_genome,
+                position=spot,
+                params=params,
+                parent1_id=parent1.id,
+                parent2_id=mate.id,
+                species_id=getattr(parent1, 'species_id', 0),
+            )
+
+            grid.data[spot[0], spot[1], 0] = child.id
+            parent1.energy -= cost
+
+            reproducers.add(parent1.id)
+            reproducers.add(mate.id)
+            offspring.append(child)
+
+        return offspring, reproducers
+
+    def _find_nearby_empty(self, grid, cx, cy, radius=3):
+        """Search outward from (cx, cy) for an empty non-barrier cell."""
+        for r in range(1, radius + 1):
+            for dx in range(-r, r + 1):
+                for dy in range(-r, r + 1):
+                    if abs(dx) != r and abs(dy) != r:
+                        continue  # only check perimeter of this ring
+                    nx, ny = cx + dx, cy + dy
+                    if 0 <= nx < grid.size[0] and 0 <= ny < grid.size[1]:
+                        if grid.is_valid_move_target(nx, ny):
+                            return (nx, ny)
+        return None
+
+    def inject_random_creatures(self, grid, count):
+        """Create random-genome creatures at empty grid locations (extinction safety net)."""
+        new_creatures = []
+        for _ in range(count):
+            try:
+                pos = grid.find_empty_location()
+            except Exception:
+                break
+            genome = Genome(length=self.params['genome_length'], params=self.params)
+            creature = Creature(genome=genome, position=pos, params=self.params)
+            grid.data[int(pos[0]), int(pos[1]), 0] = creature.id
+            new_creatures.append(creature)
+        return new_creatures
+
     def tournament_selection(self, scored_creatures, tournament_size=5):
         """
         Select a creature using tournament selection

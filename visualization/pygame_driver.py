@@ -64,17 +64,34 @@ class PyGameDriver(DisplayDriver):
         y += 6
 
         # Generation / Population
-        self._draw_text(f"Generation: {sidebar_data.generation}", x, y, (200, 200, 200))
-        y += 22
-        self._draw_text(f"Population: {sidebar_data.total_population}", x, y, (200, 200, 200))
-        y += 22
-
-        # Survivors from previous generation
-        if sidebar_data.survivors_last_gen > 0:
-            pct = sidebar_data.survivors_last_gen_pct
-            pct_color = (100, 255, 100) if pct > 0.3 else (255, 200, 80) if pct > 0.1 else (255, 80, 80)
-            self._draw_text(f"Survivors: {sidebar_data.survivors_last_gen} ({pct:.0%})", x, y, pct_color)
+        if sidebar_data.continuous_mode:
+            self._draw_text(f"Virtual Gen: {sidebar_data.generation}", x, y, (200, 200, 200))
             y += 22
+            self._draw_text(f"Population: {sidebar_data.total_population}", x, y, (200, 200, 200))
+            y += 22
+            self._draw_text(f"Total Steps: {sidebar_data.total_steps}", x, y, (160, 160, 200))
+            y += 22
+            self._draw_text(f"Births: {sidebar_data.births_this_vgen}", x, y, (100, 255, 100))
+            y += 22
+            self._draw_text(f"Deaths: {sidebar_data.deaths_this_vgen}", x, y, (255, 100, 100))
+            y += 22
+            # Pop health
+            pct = sidebar_data.survivors_last_gen_pct
+            health_color = (100, 255, 100) if pct > 0.5 else (255, 200, 80) if pct > 0.2 else (255, 80, 80)
+            self._draw_text(f"Pop Health: {pct:.0%}", x, y, health_color)
+            y += 22
+        else:
+            self._draw_text(f"Generation: {sidebar_data.generation}", x, y, (200, 200, 200))
+            y += 22
+            self._draw_text(f"Population: {sidebar_data.total_population}", x, y, (200, 200, 200))
+            y += 22
+
+            # Survivors from previous generation
+            if sidebar_data.survivors_last_gen > 0:
+                pct = sidebar_data.survivors_last_gen_pct
+                pct_color = (100, 255, 100) if pct > 0.3 else (255, 200, 80) if pct > 0.1 else (255, 80, 80)
+                self._draw_text(f"Survivors: {sidebar_data.survivors_last_gen} ({pct:.0%})", x, y, pct_color)
+                y += 22
 
         y += 6
         self._draw_separator(sidebar_x, y, screen_w)

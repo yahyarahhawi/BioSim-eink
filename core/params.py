@@ -66,6 +66,21 @@ DEFAULT_PARAMS = {
         'wall': 1.0, 'corridor': 1.0, 'bloom': 1.0,
         'drought': 1.0, 'wave': 1.0, 'partition': 1.0
     },
+    # Continuous mode (no discrete generations)
+    'continuous_mode': False,
+    'continuous_reproduction_threshold': 800,
+    'continuous_reproduction_cost': 400,
+    'continuous_reproduction_radius': 5,
+    'continuous_challenge_bonus': 2.0,
+    'continuous_challenge_penalty': 3.0,
+    'continuous_challenge_rotation_steps': 60000,
+    'continuous_metabolism_base': 0.1,
+    'continuous_metabolism_scale_factor': 0.5,
+    'continuous_min_pop_fraction': 0.10,
+    'continuous_soft_floor_fraction': 0.50,
+    'continuous_virtual_gen_steps': 1000,
+    'continuous_lifespan': 0,           # Max lifespan in steps (0 = no limit)
+    'continuous_lifespan_variance': 50, # +/- random variance on lifespan
     # Display
     'display_mode': 'pygame',  # Display mode: 'pygame' or 'eink'
     'genome_divergence_tint': False,  # Tint divergent genomes yellow

@@ -202,16 +202,15 @@ class CreatureRenderer:
         return base_color
 
     def genome_to_color(self, genome):
-        """Hash full genome to a vivid HSV color so different genomes look distinct."""
-        import colorsys
-        # Hash the full genome hex string
+        """Hash genome to one of three colors: red, blue, or yellow."""
         genome_str = ''.join(g.hex_value for g in genome.genes)
         h = hash(genome_str) & 0xFFFFFFFF
-        # Hue from hash — full spectrum
-        hue = (h % 360) / 360.0
-        # Fixed high saturation and value for vivid, visible colors
-        r, g, b = colorsys.hsv_to_rgb(hue, 0.85, 0.9)
-        return (int(r * 255), int(g * 255), int(b * 255))
+        palette = [
+            (220, 50, 50),   # red
+            (50, 100, 220),  # blue
+            (220, 180, 0),   # yellow
+        ]
+        return palette[h % 3]
 
 
 class Renderer:

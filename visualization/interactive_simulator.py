@@ -143,6 +143,15 @@ class InteractiveSimulator(Simulator):
         self.last_survivors_count = 0
         self.last_survivors_pct = 0.0
 
+        # Continuous mode state
+        self.total_steps = 0
+        self.virtual_generation = 0
+        self.rolling_births = 0
+        self.rolling_deaths = 0
+        self.rolling_reproducer_ids = set()
+        self.birth_budget = 0.0          # fractional births owed
+        self.deaths_last_vgen = 0        # deaths from previous vgen, sets next vgen's birth rate
+
     def initialize(self):
         """Initialize the simulation with interactive-specific behavior"""
         # Preserve initial configuration on first run
@@ -231,8 +240,8 @@ class InteractiveSimulator(Simulator):
                         self.params['background_color'] = [255, 255, 255]  # Back to white
                     print(f"Background color changed to: {self.params['background_color']}")
 
-                # Force new generation
-                elif event.key == pygame.K_g and self.paused:
+                # Force new generation (disabled in continuous mode)
+                elif event.key == pygame.K_g and self.paused and not self.params.get('continuous_mode', False):
                     self.step = self.params['steps_per_generation']  # This will trigger a new generation
                     # logger.info("Forced new generation")
 
@@ -411,10 +420,16 @@ class InteractiveSimulator(Simulator):
         self.screen.blit(self.instructions_window, self.instructions_pos)
 
     def update(self):
-        """Update one simulation step with interactive-specific behavior"""
+        """Update one simulation step — dispatches to generational or continuous mode."""
         if self.paused:
             return
+        if self.params.get('continuous_mode', False):
+            self._update_continuous()
+        else:
+            self._update_generational()
 
+    def _update_generational(self):
+        """Original generational update logic."""
         # Create a dictionary of creatures for quick lookup
         creatures_dict = {creature.id: creature for creature in self.population.creatures}
 
@@ -427,7 +442,7 @@ class InteractiveSimulator(Simulator):
         # Process death queue and update kill count
         self.murder_count += len(self.grid.death_queue)
         self.grid.process_death_queue(creatures_dict)
-        
+
         # Process move queue
         self.grid.process_move_queue(creatures_dict)
 
@@ -441,13 +456,134 @@ class InteractiveSimulator(Simulator):
 
         # Increment step counter
         self.step += 1
-        
+
         # Update params with current step for challenge visualization
         self.params['current_step'] = self.step
 
         # Check if generation is complete
         if self.step >= self.params['steps_per_generation']:
             self.end_generation()
+
+    def _update_continuous(self):
+        """Continuous mode: creatures have a fixed lifespan, die naturally,
+        and are replaced by offspring of the fittest (highest energy) creatures.
+
+        Simple loop:
+          1. Move creatures (sensor → NN → action)
+          2. Age creatures — kill those past lifespan
+          3. Challenge energy: in-zone +bonus, out-of-zone -penalty
+          4. Kill energy-depleted creatures
+          5. Process queues, sweep dead
+          6. Replace dead: spawn one offspring per death, parents chosen by energy rank
+          7. Fade pheromones, challenge rotation, bookkeeping
+        """
+        from core.survival_criteria import SurvivalCriteria
+
+        params = self.params
+        target_pop = params['population_size']
+        creatures_dict = {c.id: c for c in self.population.creatures}
+
+        # 1. Move all alive creatures
+        for creature in self.population.creatures:
+            if creature.alive:
+                creature.update(self.grid, self.population.creatures, self.signals, self.total_steps)
+
+        # 2. Age + lifespan death
+        for creature in self.population.creatures:
+            if not creature.alive:
+                continue
+            creature.age_steps += 1
+            if creature.max_lifespan > 0 and creature.age_steps >= creature.max_lifespan:
+                creature.alive = False
+                cx, cy = int(creature.position[0]), int(creature.position[1])
+                if 0 <= cx < self.grid.size[0] and 0 <= cy < self.grid.size[1]:
+                    if self.grid.data[cx, cy, 0] == creature.id:
+                        self.grid.data[cx, cy, 0] = 0
+
+        # 3. Challenge energy pressure (selective pressure — this is what drives evolution)
+        criteria = SurvivalCriteria(params, self.grid)
+        challenge_type = params.get('challenge', 0)
+        bonus = params.get('continuous_challenge_bonus', 2.0)
+        penalty = params.get('continuous_challenge_penalty', 3.0)
+
+        for creature in self.population.creatures:
+            if not creature.alive:
+                continue
+            if criteria.is_in_challenge_zone(creature, challenge_type):
+                creature.energy += bonus
+            else:
+                creature.energy -= penalty
+
+        # 4. Kill energy-depleted creatures
+        deaths_this_step = 0
+        for creature in self.population.creatures:
+            if creature.alive and creature.energy <= 0:
+                creature.alive = False
+                deaths_this_step += 1
+                cx, cy = int(creature.position[0]), int(creature.position[1])
+                if 0 <= cx < self.grid.size[0] and 0 <= cy < self.grid.size[1]:
+                    if self.grid.data[cx, cy, 0] == creature.id:
+                        self.grid.data[cx, cy, 0] = 0
+
+        self.rolling_deaths += deaths_this_step
+
+        # 5. Process queues, sweep dead
+        self.murder_count += len(self.grid.death_queue)
+        self.grid.process_death_queue(creatures_dict)
+        self.grid.process_move_queue(creatures_dict)
+
+        prev_alive = len(self.population.creatures)
+        self.population.creatures = [c for c in self.population.creatures if c.alive]
+        total_died = prev_alive - len(self.population.creatures)
+        self.rolling_deaths += max(0, total_died - deaths_this_step)  # catch queue deaths
+
+        # 6. Replace dead: one offspring per death, parents = highest energy
+        if total_died > 0:
+            offspring, reproducer_ids = self.population.reproduce_top_n(
+                self.grid, total_died)
+            self.population.creatures.extend(offspring)
+            self.rolling_births += len(offspring)
+            self.rolling_reproducer_ids.update(reproducer_ids)
+
+        # 7. Hard population floor (safety net)
+        alive_count = len(self.population.creatures)
+        min_pop = int(params.get('continuous_min_pop_fraction', 0.10) * target_pop)
+        if alive_count < min_pop:
+            injected = self.population.inject_random_creatures(self.grid, min_pop - alive_count)
+            self.population.creatures.extend(injected)
+            self.rolling_births += len(injected)
+
+        # 8. Fade pheromones
+        for layer in range(self.signals.num_layers):
+            self.signals.fade(layer)
+
+        # 9. Challenge rotation (step-based)
+        rotation_interval = params.get('continuous_challenge_rotation_steps', 60000)
+        if self.total_steps > 0 and self.total_steps % rotation_interval == 0:
+            if self.challenge_rotator:
+                self.challenge_rotator.step_generation(self.virtual_generation)
+            if self.event_log:
+                self.event_log.log(
+                    self.virtual_generation, EventType.PRESSURE_CHANGE,
+                    f"Challenge rotated at step {self.total_steps}",
+                    {'step': self.total_steps}
+                )
+
+        # 10. Virtual generation bookkeeping
+        self.total_steps += 1
+        self.params['current_step'] = self.total_steps
+        vgen_steps = params.get('continuous_virtual_gen_steps', 1000)
+        if self.total_steps % vgen_steps == 0:
+            self.virtual_generation += 1
+            alive_now = len(self.population.creatures)
+            repro_pct = (len(self.rolling_reproducer_ids) / alive_now * 100) if alive_now > 0 else 0.0
+            print(f"VGen {self.virtual_generation} | Step {self.total_steps} | "
+                  f"Pop: {alive_now}/{target_pop} | "
+                  f"Births: {self.rolling_births} Deaths: {self.rolling_deaths} | "
+                  f"Reproduced: {repro_pct:.1f}%")
+            self.rolling_births = 0
+            self.rolling_deaths = 0
+            self.rolling_reproducer_ids = set()
 
     def end_generation(self):
         """Handle end of generation logic with interactive-specific behavior"""
@@ -601,11 +737,20 @@ class InteractiveSimulator(Simulator):
         self.custom_renderer.render_world(self.screen, self.grid, self.population.creatures)
 
         # Display generation and step information
-        info_text = self.font.render(
-            f"Gen: {self.generation} | Pop: {len(self.population.creatures)} | "
-            f"Step: {self.step}/{self.params['steps_per_generation']} | "
-            f"Speed: {self.params['fps']} fps",
-            True, (255, 255, 255))
+        if self.params.get('continuous_mode', False):
+            alive = sum(1 for c in self.population.creatures if c.alive)
+            target = self.params['population_size']
+            info_text = self.font.render(
+                f"Step: {self.total_steps} | Pop: {alive}/{target} | "
+                f"VGen: {self.virtual_generation} | B/D: {self.rolling_births}/{self.rolling_deaths} | "
+                f"Speed: {self.params['fps']} fps",
+                True, (255, 255, 255))
+        else:
+            info_text = self.font.render(
+                f"Gen: {self.generation} | Pop: {len(self.population.creatures)} | "
+                f"Step: {self.step}/{self.params['steps_per_generation']} | "
+                f"Speed: {self.params['fps']} fps",
+                True, (255, 255, 255))
         self.screen.blit(info_text, (10, 10))
 
         # Display challenge name only when environment system is off
@@ -654,8 +799,20 @@ class InteractiveSimulator(Simulator):
     def _build_sidebar_data(self):
         """Build SidebarData from current simulation state."""
         data = SidebarData()
-        data.generation = self.generation
-        data.total_population = len(self.population.creatures)
+
+        if self.params.get('continuous_mode', False):
+            alive = sum(1 for c in self.population.creatures if c.alive)
+            target = self.params['population_size']
+            data.generation = self.virtual_generation
+            data.total_population = alive
+            data.survivors_last_gen_pct = alive / target if target > 0 else 0.0
+            data.continuous_mode = True
+            data.total_steps = self.total_steps
+            data.births_this_vgen = self.rolling_births
+            data.deaths_this_vgen = self.rolling_deaths
+        else:
+            data.generation = self.generation
+            data.total_population = len(self.population.creatures)
 
         num_species = self.params.get('num_species', 1)
         if num_species >= 2:

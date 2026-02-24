@@ -68,6 +68,15 @@ class Creature:
         self.has_killed = False
         self.challengeBits = False  # Track if creature has touched a wall during lifetime
 
+        # Age tracking for continuous mode lifespan
+        self.age_steps = 0
+        lifespan_base = params.get('continuous_lifespan', 0)
+        lifespan_var = params.get('continuous_lifespan_variance', 50)
+        if lifespan_base > 0:
+            self.max_lifespan = lifespan_base + random.randint(-lifespan_var, lifespan_var)
+        else:
+            self.max_lifespan = 0  # 0 means no lifespan limit
+
         # Enhanced state tracking for more complex behaviors
         self.birth_position = self.position  # Track where creature was born
         self.last_positions = []  # Track recent positions (for detecting if stuck)

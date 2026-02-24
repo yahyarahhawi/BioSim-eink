@@ -39,6 +39,13 @@ class SurvivalCriteria:
         self.params = params
         self.grid = grid
 
+    def is_in_challenge_zone(self, creature, challenge_type):
+        """Return True if creature is in the favorable zone for the current challenge."""
+        if not creature.alive:
+            return False
+        passed, _ = self.check_criterion(creature, challenge_type)
+        return passed
+
     def check_criterion(self, creature, challenge_type):
         """
         Check if a creature meets a specific survival criterion

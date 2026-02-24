@@ -20,6 +20,10 @@ class SidebarData:
     extinction_count: int = 0
     survivors_last_gen: int = 0
     survivors_last_gen_pct: float = 0.0
+    continuous_mode: bool = False
+    total_steps: int = 0
+    births_this_vgen: int = 0
+    deaths_this_vgen: int = 0
 
 
 @dataclass
